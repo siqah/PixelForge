@@ -58,41 +58,35 @@ export default function CropTool({ imageUri, onCropComplete, onClose }: CropTool
   }, [imageUri]);
 
   const handleCrop = async () => {
-    if (processing) return;
-    
+    if (processing || !imageUri) return;
+    if (!imageDimensions) {
+      Alert.alert('Error', 'Image dimensions not loaded. Please wait and try again.');
+      return;
+    }
     setProcessing(true);
     try {
       const actions: any[] = [];
-      
-      console.log('Processing image:', imageUri);
-      
       if (rotation !== 0) {
         actions.push({ rotate: rotation });
       }
-      
+      // Only crop if a ratio is selected (not 'Free')
       if (selectedRatio && imageDimensions) {
-        // Calculate crop dimensions based on actual image size and selected ratio
         let cropWidth: number;
         let cropHeight: number;
         let originX: number;
         let originY: number;
-
         const imageRatio = imageDimensions.width / imageDimensions.height;
-
         if (selectedRatio > imageRatio) {
-          // Crop is wider than image - fit to width
           cropWidth = imageDimensions.width;
           cropHeight = cropWidth / selectedRatio;
           originX = 0;
           originY = (imageDimensions.height - cropHeight) / 2;
         } else {
-          // Crop is taller than image - fit to height
           cropHeight = imageDimensions.height;
           cropWidth = cropHeight * selectedRatio;
           originX = (imageDimensions.width - cropWidth) / 2;
           originY = 0;
         }
-
         actions.push({
           crop: {
             originX: Math.round(originX),
@@ -101,29 +95,17 @@ export default function CropTool({ imageUri, onCropComplete, onClose }: CropTool
             height: Math.round(cropHeight),
           }
         });
-        
-        console.log('Crop params:', { originX, originY, width: cropWidth, height: cropHeight });
       }
-
       if (actions.length === 0) {
-        // No transformations selected
         Alert.alert('No Changes', 'Please select a crop ratio or apply a transformation.');
         setProcessing(false);
         return;
       }
-
-      // Use high quality settings for both platforms
       const result = await manipulateAsync(
         imageUri,
         actions,
-        { 
-          compress: 1, // Max quality for editing
-          format: SaveFormat.JPEG, // Consistent format
-          base64: false // Don't need base64 for intermediate steps
-        }
+        { compress: 1, format: SaveFormat.JPEG, base64: false }
       );
-
-      console.log('Crop completed:', result.uri);
       onCropComplete(result.uri);
     } catch (error) {
       console.error('Crop error:', error);
@@ -166,8 +148,8 @@ export default function CropTool({ imageUri, onCropComplete, onClose }: CropTool
         <Text style={styles.title}>Crop & Transform</Text>
         <TouchableOpacity 
           onPress={handleCrop} 
-          style={[styles.applyButton, processing && styles.applyButtonDisabled]}
-          disabled={processing}
+          style={[styles.applyButton, (processing || !imageUri || !imageDimensions) && styles.applyButtonDisabled]}
+          disabled={processing || !imageUri || !imageDimensions}
         >
           <Text style={styles.applyButtonText}>{processing ? 'Processing...' : 'Apply'}</Text>
         </TouchableOpacity>

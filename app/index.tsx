@@ -222,7 +222,7 @@ export default function Index() {
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.permissionContainer}>
           <Text style={styles.permissionTitle}>📸</Text>
-          <Text style={styles.permissionText}>Welcome to ChromaLab</Text>
+          <Text style={styles.permissionText}>Welcome to PixelForge</Text>
           <Text style={styles.permissionSubtext}>
             Pick a photo to start editing with professional filters and adjustments.
           </Text>

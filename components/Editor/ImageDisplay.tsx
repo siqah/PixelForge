@@ -22,6 +22,7 @@ interface ImageDisplayProps {
   temperature: number;
   tint: number;
   filter: Filter | null;
+  showIndicators?: boolean;
   textLayers?: Array<{
     text: string;
     color: string;
@@ -40,6 +41,7 @@ export default function ImageDisplay({
   temperature, 
   tint, 
   filter,
+  showIndicators = true,
   textLayers = []
 }: ImageDisplayProps) {
   // Load image with Skia
@@ -233,7 +235,7 @@ export default function ImageDisplay({
       )}
       
       {/* Visual indicator of active filters/adjustments */}
-      {(hasAdjustments || hasActiveFilter) && (
+      {(showIndicators && (hasAdjustments || hasActiveFilter)) && (
         <View style={styles.indicatorContainer}>
           <View style={styles.indicator}>
             {hasActiveFilter && (

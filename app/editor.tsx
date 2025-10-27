@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Slider from '@react-native-community/slider';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -18,6 +18,7 @@ import {
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import ViewShot from 'react-native-view-shot';
 import CropTool from '../components/Editor/CropTool';
 import ImageDisplay from '../components/Editor/ImageDisplay';
 import PresetShare from '../components/Editor/PresetShare';
@@ -26,7 +27,6 @@ import FilterGrid from '../components/Filter/FilterGrid';
 import { AdjustIcon, BackIcon, CopyIcon, CropIcon, FilterIcon, SaveIcon, TextIcon, UndoIcon } from '../components/Icons';
 import { Filter, FILTERS } from '../constants/filters';
 import { AdjustmentState } from '../utils/colorMatrix';
-import { renderImageWithAdjustments } from '../utils/imageProcessing';
 
 const { height } = Dimensions.get('window');
 
@@ -52,9 +52,19 @@ const TOOLS = [
   { id: 'text', label: 'Text', IconComponent: TextIcon },
 ];
 
+type HistoryState = {
+  adjustments: AdjustmentState;
+  filter: Filter | null;
+  textLayers: any[];
+  imageUri: string | null;
+};
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export default function Editor() {
   const { imageUri } = useLocalSearchParams();
   const router = useRouter();
+  const baseUriParam = Array.isArray(imageUri) ? imageUri[0] : imageUri;
   const [currentTool, setCurrentTool] = useState<string | null>(null);
   const [adjustments, setAdjustments] = useState<AdjustmentState>({
     brightness: 0,
@@ -64,14 +74,17 @@ export default function Editor() {
     tint: 0,
   });
   const [currentFilter, setCurrentFilter] = useState<Filter | null>(FILTERS[0]); // Start with "Original"
+  const [activeUri, setActiveUri] = useState<string | null>(baseUriParam ?? null);
   const [userPresets, setUserPresets] = useState<any[]>([]);
   const [presetName, setPresetName] = useState('');
   const [showCropTool, setShowCropTool] = useState(false);
   const [textLayers, setTextLayers] = useState<any[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [saving, setSaving] = useState(false);
   const [mediaLibraryPermission, requestMediaPermission] = MediaLibrary.usePermissions();
+  const viewShotRef = useRef<ViewShot | null>(null);
+  const hasInitializedHistory = useRef(false);
   
   // Animation for tool panel
   const [panelHeight] = useState(new Animated.Value(0));
@@ -81,6 +94,12 @@ export default function Editor() {
   }, []);
 
   useEffect(() => {
+    if (baseUriParam && baseUriParam !== activeUri) {
+      setActiveUri(baseUriParam);
+    }
+  }, [baseUriParam, activeUri]);
+
+  useEffect(() => {
     // Animate panel when tool changes
     Animated.spring(panelHeight, {
       toValue: currentTool ? 1 : 0,
@@ -88,6 +107,20 @@ export default function Editor() {
       friction: 8,
     }).start();
   }, [currentTool]);
+
+  useEffect(() => {
+    if (!hasInitializedHistory.current && activeUri) {
+      const initialState: HistoryState = {
+        adjustments: { ...adjustments },
+        filter: currentFilter,
+        textLayers: [],
+        imageUri: activeUri,
+      };
+      setHistory([initialState]);
+      setHistoryIndex(0);
+      hasInitializedHistory.current = true;
+    }
+  }, [activeUri, adjustments, currentFilter]);
 
   const loadPresets = async () => {
     try {
@@ -118,8 +151,19 @@ export default function Editor() {
     setCurrentFilter(preset.filter || FILTERS[0]);
   };
 
-  const addToHistory = () => {
-    const newState = { adjustments, filter: currentFilter, textLayers };
+  const addToHistory = (override: Partial<HistoryState> = {}) => {
+    const nextAdjustments = override.adjustments ?? adjustments;
+    const nextFilter = override.filter !== undefined ? override.filter : currentFilter;
+    const nextTextLayersSource = override.textLayers ?? textLayers;
+    const nextImageUri = override.imageUri !== undefined ? override.imageUri : activeUri;
+
+    const newState: HistoryState = {
+      adjustments: { ...nextAdjustments },
+      filter: nextFilter,
+      textLayers: nextTextLayersSource.map((layer: any) => ({ ...layer })),
+      imageUri: nextImageUri ?? null,
+    };
+
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newState);
     setHistory(newHistory);
@@ -129,9 +173,12 @@ export default function Editor() {
   const handleUndo = () => {
     if (historyIndex > 0) {
       const prevState = history[historyIndex - 1];
-      setAdjustments(prevState.adjustments);
+      setAdjustments({ ...prevState.adjustments });
       setCurrentFilter(prevState.filter || FILTERS[0]);
-      setTextLayers(prevState.textLayers);
+      setTextLayers(prevState.textLayers.map((layer: any) => ({ ...layer })));
+      if (prevState.imageUri) {
+        setActiveUri(prevState.imageUri);
+      }
       setHistoryIndex(historyIndex - 1);
     }
   };
@@ -143,7 +190,8 @@ export default function Editor() {
   };
 
   const handleCropComplete = (croppedUri: string) => {
-    // Update the image URI with the cropped version
+    setActiveUri(croppedUri);
+    addToHistory({ imageUri: croppedUri });
     setShowCropTool(false);
     Alert.alert('Cropped', 'Crop applied');
   };
@@ -158,8 +206,6 @@ export default function Editor() {
     setUserPresets(updated);
     await AsyncStorage.setItem('@presets', JSON.stringify(updated));
   };
-
-  const uri = Array.isArray(imageUri) ? imageUri[0] : imageUri;
 
   const updateAdjustment = (key: keyof AdjustmentState, value: number) => {
     setAdjustments(prev => ({ ...prev, [key]: value }));
@@ -201,20 +247,20 @@ export default function Editor() {
       return;
     }
 
-    if (!uri) {
-      Alert.alert('Error', 'No image selected to save.');
+    if (!viewShotRef.current) {
+      Alert.alert('Error', 'Preview not ready to save.');
       return;
     }
 
     setSaving(true);
     try {
-      const processedUri = await renderImageWithAdjustments({
-        sourceUri: uri,
-        adjustments,
-        filter: currentFilter,
-      });
+      await delay(40);
+      const capturedUri = await viewShotRef.current.capture?.();
+      if (!capturedUri) {
+        throw new Error('Capture failed');
+      }
 
-      await MediaLibrary.createAssetAsync(processedUri);
+      await MediaLibrary.createAssetAsync(capturedUri);
       Alert.alert(
         'Saved!', 
         'Your edited photo has been saved to your camera roll.',
@@ -271,7 +317,21 @@ export default function Editor() {
 
       {/* Image Display */}
       <View style={styles.imageContainer}>
-        <ImageDisplay uri={uri} {...adjustments} filter={currentFilter} textLayers={textLayers} />
+        <ViewShot
+          ref={viewShotRef}
+          style={styles.viewShot}
+          options={{ format: 'jpg', quality: 0.9, result: 'tmpfile' }}
+        >
+          {activeUri ? (
+            <ImageDisplay
+              uri={activeUri}
+              {...adjustments}
+              filter={currentFilter}
+              textLayers={textLayers}
+              showIndicators={!saving}
+            />
+          ) : null}
+        </ViewShot>
       </View>
 
       {/* Bottom Toolbar */}
@@ -283,6 +343,10 @@ export default function Editor() {
               key={tool.id}
               onPress={() => {
                 if (tool.id === 'crop') {
+                  if (!activeUri) {
+                    Alert.alert('No Image', 'Select a photo before cropping.');
+                    return;
+                  }
                   setShowCropTool(true);
                   setCurrentTool(null);
                 } else {
@@ -363,7 +427,7 @@ export default function Editor() {
             <View style={styles.filterPanel}>
               <Text style={styles.panelTitle}>Filters & Presets</Text>
               <FilterGrid 
-                imageUri={uri}
+                imageUri={activeUri || ''}
                 currentFilter={currentFilter}
                 onSelectFilter={handleSelectFilter} 
                 userPresets={userPresets} 
@@ -391,7 +455,7 @@ export default function Editor() {
       {showCropTool && (
         <Modal visible={true} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
           <CropTool 
-            imageUri={uri} 
+            imageUri={activeUri || ''} 
             onCropComplete={handleCropComplete} 
             onClose={() => setShowCropTool(false)} 
           />
@@ -449,6 +513,9 @@ const styles = StyleSheet.create({
   imageContainer: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  viewShot: {
+    flex: 1,
   },
   toolbar: {
     flexDirection: 'row',
